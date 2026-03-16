@@ -45,11 +45,11 @@ def get_pregnancy_info(due_date: date):
     day_of_week = days_pregnant % 7
 
     if week < 13:
-        trimester = "1삼분기 (초기)"
+        trimester = "임신 초기 (1~12주)"
     elif week < 28:
-        trimester = "2삼분기 (중기)"
+        trimester = "임신 중기 (13~27주)"
     else:
-        trimester = "3삼분기 (후기)"
+        trimester = "임신 후기 (28주~)"
 
     return {
         "days_left": days_left,
