@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.135.1",
     "python-telegram-bot[job-queue]>=22.7",
     "pytz>=2026.1.post1",
     "telegram>=0.0.1",
+    "uvicorn[standard]>=0.42.0",
 ]

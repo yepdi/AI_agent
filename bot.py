@@ -1,13 +1,16 @@
 import os
 import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta
-import pytz
 
+import pytz
+import uvicorn
+from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ContextTypes, ConversationHandler
+    Application, ApplicationBuilder, CommandHandler,
+    MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
 logging.basicConfig(
@@ -101,6 +104,7 @@ WEEKLY_TIPS = {
     39: "진통 신호를 잘 알아두세요. 규칙적 진통이 오면 병원으로!",
     40: "예정일이에요! 아기와의 만남을 기대해 주세요. 곧 만나요! 💕",
 }
+
 
 def get_weekly_tip(week: int) -> str:
     if week <= 0:
@@ -198,7 +202,7 @@ async def setduedate_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
         data[chat_id]["notify_minute"] = 0
     save_data(data)
 
-    schedule_notification(context.application, chat_id, data[chat_id])
+    schedule_notification(ptb_app, chat_id, data[chat_id])
 
     info = get_pregnancy_info(due_date)
     msg = f"✅ 출산 예정일이 {due_date.strftime('%Y년 %m월 %d일')}로 설정되었어요!\n\n"
@@ -241,7 +245,7 @@ async def settime_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data[chat_id]["notify_minute"] = 0
     save_data(data)
 
-    schedule_notification(context.application, chat_id, data[chat_id])
+    schedule_notification(ptb_app, chat_id, data[chat_id])
     await update.message.reply_text(f"✅ 알림 시간이 매일 {hour}시로 설정되었어요!")
     return ConversationHandler.END
 
@@ -260,13 +264,13 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stop_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     job_name = f"notify_{chat_id}"
-    current_jobs = context.application.job_queue.get_jobs_by_name(job_name)
+    current_jobs = ptb_app.job_queue.get_jobs_by_name(job_name)
     for job in current_jobs:
         job.schedule_removal()
     await update.message.reply_text("알림이 중단되었습니다. /setduedate 로 다시 시작할 수 있어요.")
 
 
-def schedule_notification(app, chat_id: str, user_data: dict):
+def schedule_notification(app: Application, chat_id: str, user_data: dict):
     job_name = f"notify_{chat_id}"
     current_jobs = app.job_queue.get_jobs_by_name(job_name)
     for job in current_jobs:
@@ -283,11 +287,11 @@ def schedule_notification(app, chat_id: str, user_data: dict):
     logger.info(f"알림 스케줄 등록: chat_id={chat_id}, {hour}:{minute:02d} KST")
 
 
-def main():
+def build_ptb_app() -> Application:
     if not TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN 환경 변수가 설정되지 않았습니다.")
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).updater(None).build()
 
     setduedate_handler = ConversationHandler(
         entry_points=[CommandHandler("setduedate", setduedate_start)],
@@ -296,7 +300,6 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", setduedate_cancel)],
     )
-
     settime_handler = ConversationHandler(
         entry_points=[CommandHandler("settime", settime_start)],
         states={
@@ -312,14 +315,56 @@ def main():
     app.add_handler(setduedate_handler)
     app.add_handler(settime_handler)
 
-    data = load_data()
-    for chat_id, user_data in data.items():
-        if "due_date" in user_data:
-            schedule_notification(app, chat_id, user_data)
+    return app
 
-    logger.info("봇이 시작되었습니다...")
-    app.run_polling()
+
+ptb_app = build_ptb_app()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await ptb_app.initialize()
+    await ptb_app.start()
+
+    domain = os.environ.get("REPLIT_DEV_DOMAIN", "")
+    if domain:
+        webhook_url = f"https://{domain}/webhook"
+        await ptb_app.bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook 등록 완료: {webhook_url}")
+    else:
+        logger.warning("REPLIT_DEV_DOMAIN 환경 변수가 없어 webhook 등록을 건너뜁니다.")
+
+    saved = load_data()
+    for chat_id, user_data in saved.items():
+        if "due_date" in user_data:
+            schedule_notification(ptb_app, chat_id, user_data)
+
+    yield
+
+    await ptb_app.stop()
+    await ptb_app.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, ptb_app.bot)
+    await ptb_app.process_update(update)
+    return Response(content="ok")
+
+
+@app.get("/")
+async def root():
+    return {"status": "running", "bot": "pregnancy notification bot"}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("bot:app", host="0.0.0.0", port=5000, reload=False)
