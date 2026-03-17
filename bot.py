@@ -326,13 +326,16 @@ async def lifespan(app: FastAPI):
     await ptb_app.initialize()
     await ptb_app.start()
 
-    domain = os.environ.get("REPLIT_DEV_DOMAIN", "")
+    domain = (
+        os.environ.get("REPLIT_DEV_DOMAIN")
+        or (os.environ.get("REPLIT_DOMAINS", "").split(",")[0].strip() or None)
+    )
     if domain:
         webhook_url = f"https://{domain}/webhook"
         await ptb_app.bot.set_webhook(url=webhook_url)
         logger.info(f"Webhook 등록 완료: {webhook_url}")
     else:
-        logger.warning("REPLIT_DEV_DOMAIN 환경 변수가 없어 webhook 등록을 건너뜁니다.")
+        logger.warning("도메인 환경 변수가 없어 webhook 등록을 건너뜁니다.")
 
     saved = load_data()
     for chat_id, user_data in saved.items():
